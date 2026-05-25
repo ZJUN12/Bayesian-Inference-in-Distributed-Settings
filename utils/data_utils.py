@@ -1,206 +1,139 @@
 import os
 import torch
 import numpy as np
-import math
+import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
 
-L_SIM = 600
-T_MAX = 60.0
-delta_t = T_MAX / L_SIM
-t_grid = np.arange(L_SIM) * delta_t
+def save_to_csv(mean, file_name='true_healthy_indicator.csv'):
+    print("Main_len_main:",len(mean))
+    save_dir = './FedBayes/results'
+    os.makedirs(save_dir, exist_ok=True)
+    
+    base_name, ext = os.path.splitext(file_name)
+    counter = 1
+    new_file_name = os.path.join(save_dir, file_name)
 
-lam, rho = 0.001, 1.05
-mu_b = np.array([2.5, 0.01, 0.01])
-Sigma_b = np.array([
-    [0.2, -4e-4, 7e-5],
-    [-4e-4, 3e-6, 1e-7],
-    [7e-5, 1e-7, 3e-6]
-])
-sigma_eps = np.sqrt(2)
+    while os.path.exists(new_file_name):
+        new_file_name = os.path.join(save_dir, f"{base_name}_{counter}{ext}")
+        counter += 1
 
-def generate_fk_m(t, b, scenario):
-    base = b[0] + b[1] * t**1.2 + b[2] * t**1.7
-    if scenario == "I":
-        z = 0.0
-    elif scenario == "II":
-        c = np.random.uniform(0.99, 1.01)
-        d = np.random.uniform(0.18, 0.22)
-        z = c * np.sin(d * t)
+    data = {
+        'true_all': mean,
+    }
+    
+    df = pd.DataFrame(data)
+    df.to_csv(new_file_name, index=False)
+    print(f"Data saved to {new_file_name}")
+
+
+def plot_healthy_indicator(data,index):
+    plt.figure()
+    plt.plot(data)
+    plt.xlabel("Index")
+    plt.ylabel("Healthy Indicator")
+    plt.title(index)
+    plt.savefig(f'./images/{index}.pdf')
+    plt.show()
+    
+def degration(client,time):
+    client['时间'] = pd.to_datetime(client['时间'], errors='coerce')  # 使用 errors='coerce' 处理无效日期
+    if client['时间'].isnull().any():
+        print("Warning")
+    filter_time = pd.to_datetime(time)
+    filtered_data = client[client['时间'] < filter_time]
+
+    return filtered_data
+    
+def read_data(client_data, avg_temp, time, WINDOWS, index):
+    data = degration(client_data, time)
+    scaler = MinMaxScaler()
+    data = data.copy()
+    healthy_indicator = (data['低速轴承温度(℃)'] - data['低速轴承温度(℃)'].mean()).rolling(window=WINDOWS).mean()/((data['风轮转速(rpm)'])*0.3).rolling(window=WINDOWS).mean()
+    healthy_indicator = healthy_indicator[10000:]
+    healthy_indicator = scaler.fit_transform(healthy_indicator.values.reshape(-1, 1))
+    experimental_data = data[:][['低速轴承温度(℃)', '风轮转速(rpm)']].rolling(window=WINDOWS).mean()
+    experimental_data = experimental_data[10000:]
+    experimental_data = scaler.fit_transform(experimental_data)
+
+    
+    plot_healthy_indicator(healthy_indicator,index)
+    split_index = int(0.7 * len(experimental_data))
+    X_train_data = experimental_data[:split_index]
+    Y_train_data = healthy_indicator[:split_index]
+    print('X_train_head:',X_train_data[:9])
+    print('y_train_head:',Y_train_data[:9])
+
+
+    print('data_utils_train_data_shape:',len(X_train_data))
+    X_test_data  = experimental_data[split_index:]
+    Y_test_data = healthy_indicator[:split_index]
+    print('data_utils_test_data_shape:',len(X_test_data))
+    
+    return X_train_data, Y_train_data, X_test_data, Y_test_data
+
+
+def read_user_data(index, device = None):
+
+    device = torch.device('cuda') if device is None else device
+    
+    if index == "Client_Shanghai":
+        Client_Shanghai = pd.read_csv('./data/WT35_shanghai/WT_35号风机.csv')
+        X_train_data, Y_train_data, X_test_data, Y_test_data = read_data(Client_Shanghai, 25.8, '2019-08-01 11:01:12', 10000, index) # 2019-08-01 11:01:12
+        X_train = process_sequence_data(X_train_data, device, True)
+        y_train = process_sequence_data(Y_train_data, device, False)
+        X_test = process_sequence_data(X_test_data, device, True)
+        y_test = process_sequence_data(Y_test_data, device, False)
+        train_data = [(x, y) for x, y in zip(X_train, y_train)]
+        test_data = [(x, y) for x, y in zip(X_test, y_test)]
+        
+        return train_data, test_data
+    
+    elif index == "Client_Tianjin":
+        Client_Tianjin = pd.read_csv('./data/WT1_tianjin/WT_1号.csv')
+        X_train_data, Y_train_data, X_test_data, Y_test_data = read_data(Client_Tianjin, 9.6, '2019-05-24 13:34:20', 10000, index)# 2019-05-24 13:34:20
+        X_train = process_sequence_data(X_train_data, device, True)
+        y_train = process_sequence_data(Y_train_data, device, False)
+        X_test = process_sequence_data(X_test_data, device, True)
+        y_test = process_sequence_data(Y_test_data, device, False)
+
+        train_data = [(x, y) for x, y in zip(X_train, y_train)]
+        test_data = [(x, y) for x, y in zip(X_test, y_test)]
+        
+        return train_data, test_data
+    
     else:
-        raise ValueError("Unknown scenario")
-    return base + z
-
-
-def generate_yk_m(f_t, sigma_eps): 
-    eps = np.random.normal(0, sigma_eps, size=len(f_t))
-    return f_t + eps
-
-
-def simulate_unit_curve(scenario, sigma_eps):
-    b = np.random.multivariate_normal(mu_b, Sigma_b)
-    f_t = generate_fk_m(t_grid, b, scenario)
-    y_t = generate_yk_m(f_t, sigma_eps)
-    return t_grid, y_t
-
-
-def plot_site_units(site_id, raw_curves, scenario):
-    plt.rcParams['font.family'] = 'Times New Roman'
-    plt.rcParams['mathtext.fontset'] = 'stix'
-    plt.rcParams['axes.unicode_minus'] = False
-    plt.rcParams['axes.labelsize'] = 18
-    plt.rcParams['xtick.labelsize'] = 16
-    plt.rcParams['ytick.labelsize'] = 16
-
-    plt.figure(figsize=(6, 6))
-    for curve in raw_curves:
-        plt.plot(t_grid, curve, alpha=0.6, linewidth=1)
-
-    plt.xlabel(r"Month $t$")
-    plt.ylabel(r"Degradation Signal $y(t)$")
-    save_path = f"./fig/site_{site_id}_scenario_{scenario}.pdf"
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=200)
-    plt.show() 
-    plt.close()
-
-
-def process_sequence_data(data_array, device, isX):
-    sequence_length = 30
-    pred_length = 1
-    output = []
-
-    data_array = data_array.reshape(-1, 1)
-
-    for i in range(len(data_array) - sequence_length - pred_length + 1):
-        if isX:
-            seq = data_array[i:i+sequence_length]
-        else:
-            seq = data_array[i+sequence_length:i+sequence_length+pred_length]
-
-        tensor = torch.tensor(seq, dtype=torch.float32).to(device)
-        output.append(tensor)
-
-    return output
-
-
-def generate_site_dataset(client_id, n_units, scenario, device, split_mode="temporal"):
-    print(f"Generating Site {client_id}: {n_units} units | Scenario {scenario} | Mode: {split_mode}")
-
-    raw_X_list = []
-    raw_Y_list = []
-
-
-    for _ in range(n_units):
-        t_grid, y_obs = simulate_unit_curve(scenario, sigma_eps)
-        raw_X_list.append(t_grid)
-        raw_Y_list.append(y_obs)
-    
-    plot_site_units(client_id, raw_Y_list, scenario)
-    all_X_values = np.concatenate(raw_X_list)
-    all_Y_values = np.concatenate(raw_Y_list)
-
-    max_X = np.max(all_X_values)  
-    max_Y = np.max(all_Y_values)
-
-    print("data_utils_max_X:", max_X)
-    print("data_utils_max_Y:", max_Y)
-
-    norm_X_list = [x / max_X for x in raw_X_list]
-    norm_Y_list = [y / max_Y for y in raw_Y_list]
-
-    total_units_train_data = [] 
-    total_units_test_data = []
-
-    for i in range(n_units):
-        X = np.array(norm_X_list[i]).reshape(-1, 1)
-        Y = np.array(norm_Y_list[i]).reshape(-1, 1)
-
-        full_len = len(X)
-        if split_mode == "temporal":
-            split = int(0.7 * full_len) 
-        elif split_mode == "train_only":
-            split = full_len            
-        elif split_mode == "test_only":
-            split = 0                   
-        else:
-            raise ValueError(f"Unknown split_mode: {split_mode}")
-
-  
-        X_tr, X_te = X[:split], X[split:]
-        Y_tr, Y_te = Y[:split], Y[split:]
-
-  
-        unit_train_samples = []
-        unit_test_samples = []
-
-
-        if len(X_tr) > 0:
-            tensor_X_tr = torch.tensor(X_tr, dtype=torch.float32).to(device)
-            tensor_Y_tr = torch.tensor(Y_tr, dtype=torch.float32).to(device)
-            unit_train_samples = list(zip(tensor_X_tr, tensor_Y_tr))
-        if len(X_te) > 0:
-            tensor_X_te = torch.tensor(X_te, dtype=torch.float32).to(device)
-            tensor_Y_te = torch.tensor(Y_te, dtype=torch.float32).to(device)
-            unit_test_samples = list(zip(tensor_X_te, tensor_Y_te))
-
-        total_units_train_data.append(unit_train_samples)
-        total_units_test_data.append(unit_test_samples)
-
-    print(f"Site {client_id} Final Structure:")
-    if len(total_units_train_data) > 0:
-        print(f"  - Unit 0 Train Len: {len(total_units_train_data[0])}")
-        print(f"  - Unit 0 Test Len:  {len(total_units_test_data[0])}")
-
-    return total_units_train_data, total_units_test_data, 
-
-
-def read_user_data(client_index, n_units=None, scenario=None, device=None, split_mode="temporal", time=None):
-    np.random.seed(time)
-    print("data_util_scenario:", scenario)
-    device = torch.device("cpu") if device is None else device
-    client_id = int(client_index.split("_")[-1]) if isinstance(client_index, str) else int(client_index)
-
-    return generate_site_dataset(
-        client_id=client_id,
-        n_units=n_units,
-        scenario=scenario,
-        device=device,
-        split_mode=split_mode,
-    )
-
-
-
-if __name__ == "__main__":
-    device = torch.device("cpu")
-
-    target_site_id = 0 
-    
-    clients_config = [
-        {"name": "Client_0", "units": 5, "scenario": "I"}, # 假设 Site 0 是非线性的
-        {"name": "Client_1", "units": 5, "scenario": "I"},
-        {"name": "Client_2", "units": 5, "scenario": "I"},
-    ]
-
-    print(">>> Start Generating the Dataset (Leave-One-Site-Out Protocol)...")
-
-    for conf in clients_config:
-        name = conf["name"]
-        cid = int(name.split("_")[-1])
+        Client_Hubei = pd.read_csv('./data/WT24_hubei/WT_ 3-333024.csv')
+        X_train_data, Y_train_data, X_test_data, Y_test_data = read_data(Client_Hubei, 9.6, '2019-06-10 22:07:01', 10000, index) #2019-06-10 22:07:01
+        X_train = process_sequence_data(X_train_data, device, True)
+        y_train = process_sequence_data(Y_train_data, device, False)
+        X_test = process_sequence_data(X_test_data, device, True)
+        y_test = process_sequence_data(Y_test_data, device, False)
+        train_data = [(x, y) for x, y in zip(X_train, y_train)]
+        test_data = [(x, y) for x, y in zip(X_test, y_test)]
         
-        if cid == target_site_id:
-            mode = "test_only"  
-        else:
-            mode = "train_only" # 
-            
-        train, test = read_user_data(
-            client_index=name, 
-            n_units=conf["units"], 
-            device=device, 
-            scenario=conf["scenario"],
-            split_mode=mode,  
-            time=1,
-        )
-        
-        print(f"[{name}] Mode: {mode:<10} | Train samples: {len(train):<5} | Test samples: {len(test)}")
+        return train_data, test_data
+    
+
+def process_sequence_data(data, device, isX):
+    sequence_length = 30  
+    pred_length = 1     
+    X = []
+    y = []
+    data = np.array(data)  
+
+    if isX == True:
+        for i in range(len(data) - sequence_length - pred_length + 1):
+            input_seq = data[i:i+sequence_length]
+            X_tensor = torch.Tensor(input_seq).type(torch.float32).to(device)
+            X.append(X_tensor)
+        return X
+    else:
+        for i in range(len(data) - sequence_length - pred_length + 1):
+            target_seq = data[i+sequence_length:i+sequence_length+pred_length]
+            y_tensor = torch.Tensor(target_seq).type(torch.float32).to(device)
+            y.append(y_tensor)
+        return y
+
+

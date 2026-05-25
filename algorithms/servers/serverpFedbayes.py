@@ -7,90 +7,58 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
+
 class pFedBayes(Server):
     def __init__(self,K, dataset,algorithm, model, batch_size, global_learning_rate, beta, lamda, num_glob_iters,
-                 local_epochs, optimizer, num_sites, times, device, local_learning_rate, num_units, scenario, alpha,
+                 local_epochs, optimizer, num_clients, times, device, local_learning_rate,
                  output_dim=5, post_fix_str=''):
         super().__init__(K, dataset, algorithm, model[0], batch_size, global_learning_rate, beta, lamda, num_glob_iters,
-                         local_epochs, optimizer, num_sites, times, device, local_learning_rate, num_units, scenario, alpha,)
-        self.times = times
+                         local_epochs, optimizer, num_clients, times, device)
+
         self.local_learning_rate = local_learning_rate
         self.post_fix_str = post_fix_str
-        total_sites = [f"site_{i}" for i in range(num_sites)]
-        print('sites initializting...')
-        print("scenario:", scenario)
-        target_test_site_id = 0
-        for i, client_name in enumerate(total_sites):
-            client_id = i
-
-            if client_id == target_test_site_id:
-                current_mode = "test_only"
-                print(f" -> Set {client_name} as TARGET SITE (Test Only)")
-            else:
-                current_mode = "train_only"
+        total_clients = {"Client_Shanghai", "Client_Tianjin", "Client_Hubei"}
+        print('clients initializting...')
+        for client in total_clients:
+            train, test = read_user_data(client)
+            user = UserpFedBayes(K ,id, train, test, model, batch_size, global_learning_rate,beta,lamda, local_epochs, optimizer,
+                                 local_learning_rate, device, output_dim=output_dim)
+            self.users.append(user)
+            self.total_train_samples += user.train_samples
             
-
-            train, test = read_user_data(
-                client_index=client_name, 
-                n_units=num_units,           
-                scenario=scenario,   
-                device=device,
-                split_mode=current_mode,      
-                time = self.times
-            )
-            
-            user = UserpFedBayes(
-                K, 
-                client_id, 
-                train, 
-                test, 
-                model, 
-                batch_size, 
-                global_learning_rate,
-                beta,
-                lamda, 
-                local_epochs, 
-                optimizer,
-                local_learning_rate, 
-                device, 
-                output_dim=output_dim
-            )
-            if current_mode == "train_only":  
-                self.train_users.append(user)
-                self.total_train_samples += user.train_samples
-            else:
-                self.test_users.append(user)      
-                self.total_test_samples += user.test_samples
-                print(f"User {client_id} added to test_users list.") 
-            
-        print("Number of users / total users:", num_sites, " / " ,total_sites)
-        print(f"DEBUG Check: len(train_users)={len(self.train_users)}, len(test_users)={len(self.test_users)}")
+        print("Number of users / total users:", num_clients, " / " ,total_clients)
         print("Finished creating FedAvg server.")
 
     def send_grads(self):
-        assert (self.train_users is not None and len(self.train_users) > 0)
+        assert (self.users is not None and len(self.users) > 0)
         grads = []
         for param in self.model.parameters():
             if param.grad is None:
                 grads.append(torch.zeros_like(param.data))
             else:
                 grads.append(param.grad)
-        for user in self.train_users:
+        for user in self.users:
             user.set_grads(grads)
 
     def train(self):
-        num_test_nodes = len(self.test_users)
-        print("serverpFedbayes_len_test_users:", len(self.test_users))
-        all_RMSE = np.empty((0, num_test_nodes))
-        all_MAE = np.empty((0, num_test_nodes))
+        all_RMSE = np.empty((0, 3))
+        all_MAE = np.empty((0, 3))
         for glob_iter in range(self.num_glob_iters):
             print("-------------Round number: ",glob_iter, " -------------")
             self.send_parameters()
-            for user in self.train_users:
+            self.selected_users = self.select_users(glob_iter, self.num_users)
+            for user in self.selected_users:
                 user.train(self.local_epochs)
             self.aggregate_parameters()
+            
+            _, _, _, RMSE, MAE= self.evaluate_pFedbayes()
 
-            RMSE, MAE= self.evaluate_pFedbayes(glob_iter)
+            print('ServerPFedB_RMSE_Shape:', RMSE.shape)
+            print('ServerPFedB_MAE_Shape:', MAE.shape)
+            print('ServerPFedB_RMSE_Type:', type(RMSE))
+            print('ServerPFedB_MAE_Type:', type(MAE))
+            print('ServerPFedB_RMSE_Length:', len(RMSE))
+            print('ServerPFedB_MAE_Length:', len(MAE))
 
             all_RMSE = np.vstack((all_RMSE, RMSE))
             all_MAE = np.vstack((all_MAE, MAE))
@@ -108,9 +76,8 @@ class pFedBayes(Server):
         plt.ylabel('RMSE')
         plt.legend()
         plt.grid(True)
-        plt.savefig('./Simulation_FedBayes/images/RMSE_pFedBayes.pdf')
+        plt.savefig('./FedBayes/images/RMSE_pFedBayes.pdf')
         plt.show()
-
 
         plt.figure(figsize=(10, 5))
         for i in range(all_MAE.shape[1]):
@@ -120,7 +87,7 @@ class pFedBayes(Server):
         plt.ylabel('MAE')
         plt.legend()
         plt.grid(True)
-        plt.savefig('./Simulation_FedBayes/images/MAE_pFedBayes.pdf')
+        plt.savefig('./FedBayes/images/MAE_pFedBayes.pdf')
         plt.show()
 
         self.save_results(self.post_fix_str)

@@ -9,17 +9,16 @@ import pandas as pd
 def compare_pre_and_true(Users_Predicted_mean_HI, Users_Predicted_std_HI, Users_True_HI, plot_uncertainty=False):
     for i in range(len(Users_Predicted_mean_HI)):
         fig, ax = plt.subplots(figsize=(10, 6))
-
-        predicted_mean = np.array(Users_Predicted_mean_HI[i])  # (samples, predict_steps)
-        predicted_std = np.array(Users_Predicted_std_HI[i])    # (samples, predict_steps)
+        predicted_mean = np.array(Users_Predicted_mean_HI[i])  
+        predicted_std = np.array(Users_Predicted_std_HI[i])    
         true_data = np.array(Users_True_HI[i])
         
         predicted_mean = predicted_mean.squeeze(axis=0)  
         predicted_std = predicted_std.squeeze(axis=0)
         true_data = true_data.squeeze(axis=0)
-        
-
+    
         ax.plot(predicted_mean, label=f'Predicted Mean HI {i+1}', color='blue')
+
         ax.plot(true_data, label=f'True HI {i+1}', color='red', linestyle='--')
         
         ax.set_title(f'Wind Farm {i+1} Prediction vs True')
@@ -28,24 +27,29 @@ def compare_pre_and_true(Users_Predicted_mean_HI, Users_Predicted_std_HI, Users_
         
         ax.legend()
 
-        plt.savefig(f'./images/multi-input-single-output/{i}.pdf')
+        plt.savefig(f'./FedBayes/images/multi-input-single-output/{i}.pdf')
         plt.show()
 
 def compare_pre_and_true_uncertainty(Users_Predicted_mean_HI, Users_Predicted_std_HI, Users_True_HI, plot_uncertainty=False):
     for i in range(len(Users_Predicted_mean_HI)):
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        predicted_mean = np.array(Users_Predicted_mean_HI[i])  # (samples, predict_steps)
-        predicted_std = np.array(Users_Predicted_std_HI[i])    # (samples, predict_steps)
+        predicted_mean = np.array(Users_Predicted_mean_HI[i])  
+        predicted_std = np.array(Users_Predicted_std_HI[i])    
         true_data = np.array(Users_True_HI[i])
         
+        predicted_mean = predicted_mean.squeeze(axis=0)  
+        predicted_std = predicted_std.squeeze(axis=0)
+        true_data = true_data.squeeze(axis=0)
+    
+     
         predicted_all = []
         true_all = []
         std_all = []
         for j in range(predicted_mean.shape[0]):
-            predicted = predicted_mean[j, -1]  # shape (sample,)
-            true = true_data[j, -1]  # shape (sample,)
-            std = predicted_std[j, -1]  # shape (sample,)
+            predicted = predicted_mean[j, -1]  
+            true = true_data[j, -1]  
+            std = predicted_std[j, -1] 
             
             predicted_all.append(predicted)
             true_all.append(true)
@@ -61,6 +65,7 @@ def compare_pre_and_true_uncertainty(Users_Predicted_mean_HI, Users_Predicted_st
         upper_bound = predicted_all + 2 * std_all
         
         ax.plot(predicted_all, label=f'Predicted Mean HI {i+1}', color='blue')
+
         ax.fill_between(
             range(len(predicted_all)), 
             lower_bound, upper_bound, 
@@ -72,9 +77,11 @@ def compare_pre_and_true_uncertainty(Users_Predicted_mean_HI, Users_Predicted_st
         ax.set_title(f'Wind Farm {i+1} Prediction vs True')
         ax.set_xlabel('Time')
         ax.set_ylabel('Healthy Indicator Value')
-
+        
         ax.legend()
-        plt.savefig(f'./images/{i}.pdf')
+
+        # 保存图表
+        plt.savefig(f'./FedBayes/images/multi-input-single-output/{i}.pdf')
         plt.show()
         
         
@@ -91,12 +98,10 @@ def save_to_csv(mean, std, true, file_name='predictions_and_truth.csv'):
         new_file_name = os.path.join(save_dir, f"{base_name}_{counter}{ext}")
         counter += 1
 
-    
     all_means = []
     all_stds = []
     all_trues = []
 
-    
     for m, s, t in zip(mean, std, true):
         if isinstance(m, list):
             all_means.extend([x[0] for x in m])
@@ -118,7 +123,7 @@ def save_to_csv(mean, std, true, file_name='predictions_and_truth.csv'):
     print(f"Data saved to {new_file_name}")
 
 
-def simple_read_data(alg, parent_path='/home/ovo/WZJ/FedBayes/results/multi-input-single-output'):
+def simple_read_data(alg, parent_path='./FedBayes/results/multi-input-single-output'):
     """
     h5 file read.
     @param parent_path:
@@ -134,7 +139,6 @@ def simple_read_data(alg, parent_path='/home/ovo/WZJ/FedBayes/results/multi-inpu
     rs_train_loss = np.array(hf.get('rs_train_loss')[:])
     if len(rs_per_rmse) == 0:
         rs_per_rmse = [np.nan] * len(rs_glob_rmse)
-
     return rs_train_rmse, rs_train_loss, rs_glob_rmse, rs_per_rmse
 
 def get_training_data_value(num_users=100, loc_ep1=5, Numb_Glob_Iters=10, lamb=[], learning_rate=[],beta=[],algorithms_list=[], batch_size=[], dataset="", k= [] , personal_learning_rate = []):
@@ -235,7 +239,8 @@ def average_smooth(data, window_len=20, window='hanning'):
     for i in range(len(data)):
         x = data[i]
         s=np.r_[x[window_len-1:0:-1],x,x[-2:-window_len-1:-1]]
-        if window == 'flat': 
+        #print(len(s))
+        if window == 'flat': #moving average
             w=np.ones(window_len,'d')
         else:
             w=eval('numpy.'+window+'(window_len)')
@@ -267,7 +272,6 @@ def plot_summary_one_figure_Compare(num_users, loc_ep1, Numb_Glob_Iters, lamb, l
     plt.figure(1, figsize=(5, 5))
     plt.title("$\mu-$" + "strongly convex")
     plt.grid(True)
-    # Global accurancy
     for i in range(Numb_Algs):
         label = get_label_name(algorithms_list[i])
         plt.plot(glob_rmse[i, 1:], linestyle=linestyles[i], label=label+'(GM)', linewidth=1, color=colors[i], marker=markers[i],
